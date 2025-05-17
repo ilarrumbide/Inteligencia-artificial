@@ -1,0 +1,45 @@
+# Entornos virtuales
+venv/
+.env/
+.venv/
+
+# Archivos de configuración sensibles
+.env
+*.env
+*.env.*
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Bytecode de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos de log y dumps
+*.log
+*.out
+*.pid
+*.dump
+
+# Archivos de testing
+.cache/
+.tox/
+.nox/
+coverage.*
+htmlcov/
+*.cover
+*.py,cover
+.pytest_cache/
+
+# IDEs y editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Otros
+*.bak
+*.swp
+*.tmp
