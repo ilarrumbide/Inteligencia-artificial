@@ -1,3 +1,4 @@
+import numpy as np
 def evaluate_agent(env, agent, schema, episodes=2_000):
     """Devuelve reward medio del agente (greedy, ε=0)."""
     total = 0.0
