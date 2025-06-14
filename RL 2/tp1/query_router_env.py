@@ -1,27 +1,33 @@
+from __future__ import annotations
+
 import gymnasium as gym
 import numpy as np
+from schemas import StateSchema
 
 
 class QueryRouterEnv(gym.Env):
-    metadata = {"render_modes": []}
+    """Routing toy-env: choose the best LLM given context-size, #tools, resp-len."""
 
-    ctx_bins = ["small", "medium", "large"]
-    tool_bins = [0, 1, 2, 3]  # 3 ≡ "≥3"
-    resp_bins = ["short", "medium", "long"]
-    n_states = 36
+    metadata = {"render_modes": []}
     action_map = ["gpt-3.5-16k", "gpt-4o-128k", "gemini-32k"]
 
-    def __init__(self):
-        self.action_space = gym.spaces.Discrete(3)
-        self.observation_space = gym.spaces.Discrete(self.n_states)
-        self.max_steps = 100
+    def __init__(self, max_steps: int = 100, schema: StateSchema = StateSchema()):
+        super().__init__()
+        self.schema = schema
+        # MultiDiscrete → explicit factorisation of state
+        self.observation_space = gym.spaces.MultiDiscrete(
+            [schema.n_ctx, schema.n_tools, schema.n_resp]
+        )
+        self.action_space = gym.spaces.Discrete(len(self.action_map))
+
+        self.max_steps = max_steps
         self.rng = np.random.default_rng()
-        self.state = None
+        self.state: np.ndarray | None = None
         self.step_cnt = 0
 
-        # -------- base μ_q, σ_q, μ_lat para ctx = small
+        # base (μ_q, σ_q, μ_lat) for ctx == small, indexed tools × resp × model
         self.base_perf = np.array(
-            [  # tools × resp × model
+            [
                 [
                     [(0.78, 0.07, 0.25), (0.91, 0.04, 0.55), (0.83, 0.07, 0.35)],
                     [(0.72, 0.07, 0.40), (0.90, 0.04, 0.75), (0.82, 0.07, 0.55)],
@@ -47,14 +53,7 @@ class QueryRouterEnv(gym.Env):
         )
 
     # ---------- helpers ----------
-    def encode(self, ctx_idx, tool_idx, resp_idx):
-        return ctx_idx * 12 + tool_idx * 3 + resp_idx
-
-    def decode(self, s):
-        return s // 12, (s % 12) // 3, s % 3
-
-    # --- helpers --------------------------------------------
-    def _adjust_for_ctx(self, ctx, tools, resp):
+    def _adjust_for_ctx(self, ctx: int, tools: int, resp: int):
         arr = np.array(self.base_perf[tools][resp], dtype=float)
 
         if ctx == 1:  # medium
@@ -72,43 +71,40 @@ class QueryRouterEnv(gym.Env):
             arr[2, 0] -= 0.05
             arr[2, 2] += 0.25
 
-        # bonificación extra para GPT-4o en problemas “pesados”
-        if tools == 3 or resp == 2:
-            arr[1, 0] += 0.15  # +0.15 de calidad
-
+        if tools == 3 or resp == 2:  # bonus for GPT-4o
+            arr[1, 0] += 0.15
         return arr
 
-    # --- sampling -------------------------------------------
     def _sample_state(self):
         while True:
             ctx = self.rng.choice(3, p=[0.55, 0.35, 0.10])
             tools = self.rng.choice(4, p=[0.45, 0.30, 0.15, 0.10])
             resp = self.rng.choice(3, p=[0.45, 0.40, 0.15])
-
-            # descarta contexto large con 0 tools (imposible)
             if not (ctx == 2 and tools == 0):
-                return self.encode(ctx, tools, resp)
+                return np.array([ctx, tools, resp], dtype=np.int32)
 
     # ---------- gym interface ----------
-    def reset(self, seed=None, options=None):
+    def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.step_cnt = 0
         self.state = self._sample_state()
-        return self.state, {}
+        return self.state.copy(), {}
 
-    def step(self, action):
-        ctx, tools, resp = self.decode(self.state)
-
-        # acción inviable: modelo sin ventana suficiente
+    def step(self, action: int):
+        ctx, tools, resp = self.state
+        # infeasible: model window too small
         if ctx == 2 and action in (0, 2):
             reward = -10.0
         else:
-            mu_q, sig_q, mu_lat = self._adjust_for_ctx(ctx, tools, resp)[action]
-            q = np.clip(self.rng.normal(mu_q, sig_q), 0.0, 1.0)
-            lat_s = max(0.1, self.rng.normal(mu_lat, 0.05))
-            reward = q - 1.0 * lat_s  # λ = 1.0  → reward≈0 – 1
+            μ_q, σ_q, μ_lat = self._adjust_for_ctx(ctx, tools, resp)[action]
+            q = np.clip(self.rng.normal(μ_q, σ_q), 0.0, 1.0)
+            lat_s = max(0.1, self.rng.normal(μ_lat, 0.05))
+            reward = q - 1.0 * lat_s
 
         self.step_cnt += 1
         done = self.step_cnt >= self.max_steps
         self.state = None if done else self._sample_state()
-        return self.state, reward, done, False, {}
+        return (None if done else self.state.copy()), reward, done, False, {}
+
+    def render(self):
+        pass  # not needed
